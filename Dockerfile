@@ -1,33 +1,43 @@
-# TODO: check that it is working.
-FROM cr.ai.cloud.ru/aicloud-base-images/cuda12.1-torch2-py311:0.0.36
+FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
 USER root
 
-RUN mkdir ./workspace
-WORKDIR ./workspace
+RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
+    wget \
+    ca-certificates \
+    git \
+    bzip2 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update --fix-missing && apt-get upgrade -y
+ENV CONDA_DIR=/opt/conda
+RUN wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh \
+        -O /tmp/miniforge.sh && \
+    bash /tmp/miniforge.sh -b -p "${CONDA_DIR}" && \
+    rm -f /tmp/miniforge.sh
+ENV PATH=${CONDA_DIR}/bin:$PATH
 
-# installing dependencies
-RUN pip uninstall --yes opencv
-RUN pip install --upgrade --force-reinstall opencv-python
+WORKDIR /workspace
 
-RUN pip install \
-    torchvision \
-    torchinfo \
-    torcheval \
-    mujoco==3.2.0 \
-    gymnasium \
-    shimmy \
-    dm_control==1.0.2 \
-    imageio \
-    imageio-ffmpeg \
-    Pillow \
-    pyrallis \
-    h5py \
-    tqdm \
-    stable_baselines3 \
-    sb3-contrib \
-    vector-quantize-pytorch \
-    wandb==0.19.9
+COPY environment.yaml /tmp/environment.yaml
+RUN sed -i '/^prefix:/d' /tmp/environment.yaml
 
-USER user
+# mamba is pre-installed in Miniforge and significantly faster than conda
+RUN mamba env create -f /tmp/environment.yaml && \
+    mamba clean -afy
+
+ENV PATH=/opt/conda/envs/laom/bin:$PATH
+
+RUN pip uninstall -y opencv opencv-python 2>/dev/null || true && \
+    pip install --no-cache-dir --upgrade --force-reinstall opencv-python
+
+COPY . /workspace
