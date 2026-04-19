@@ -501,6 +501,7 @@ class LAOMWithLabels(nn.Module):
             nn.LayerNorm(math.prod(shape), elementwise_affine=False) if encoder_norm_out else nn.Identity(),
         )
         self.idm_head = LatentActHead(latent_act_dim, math.prod(shape), act_head_dim, dropout=act_head_dropout)
+        self.log_var_head = nn.Linear(latent_act_dim, latent_act_dim)
         self.true_actions_head = nn.Linear(latent_act_dim, true_act_dim)
 
         self.fdm_head = LatentObsHead(latent_act_dim, math.prod(shape), obs_head_dim, dropout=obs_head_dropout)
@@ -508,11 +509,19 @@ class LAOMWithLabels(nn.Module):
         self.latent_act_dim = latent_act_dim
         self.apply(weight_init)
 
-    def forward(self, obs, next_obs, predict_true_act=False):
+    def forward(self, obs, next_obs, predict_true_act=False, stochastic=False):
         # for faster forwad + unified batch norm stats, WARN: 2x batch size!
         obs_emb, next_obs_emb = self.encoder(torch.concat([obs, next_obs])).split(obs.shape[0])
 
-        latent_action = self.idm_head(obs_emb.flatten(1), next_obs_emb.flatten(1))
+        mu = self.idm_head(obs_emb.flatten(1), next_obs_emb.flatten(1))
+
+        if stochastic:
+            log_var = self.log_var_head(mu)
+            std = torch.exp(0.5 * log_var)
+            latent_action = mu + std * torch.randn_like(std)
+        else:
+            latent_action = mu
+
         latent_next_obs = self.fdm_head(obs_emb.flatten(1).detach(), latent_action)
         # TODO: use norm from encoder here too!
 
@@ -520,6 +529,8 @@ class LAOMWithLabels(nn.Module):
             true_action = self.true_actions_head(latent_action)
             return latent_next_obs, latent_action, true_action, obs_emb.flatten(1).detach()
 
+        if stochastic:
+            return latent_next_obs, latent_action, obs_emb.flatten(1).detach(), mu, log_var
         return latent_next_obs, latent_action, obs_emb.flatten(1).detach()
 
     @torch.no_grad()

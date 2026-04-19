@@ -72,7 +72,7 @@ def make_env(args, config):
 
 @pyrallis.wrap()
 def main(args: Args):
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() and args.cuda else "cpu")
 
     config = torch.load(os.path.join(args.checkpoint_path, "config.pt"))
     checkpoint = torch.load(os.path.join(args.checkpoint_path, args.checkpoint_name), map_location=device)

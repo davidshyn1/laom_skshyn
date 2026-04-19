@@ -5,6 +5,7 @@ import time
 import uuid
 import warnings
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Optional
 
 import gymnasium as gym
@@ -18,6 +19,8 @@ from dm_control import suite
 from gymnasium.wrappers.utils import update_mean_var_count_from_moments
 from shimmy import DmControlCompatibilityV0
 from torch.distributions.normal import Normal
+
+_DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
 
 
 @dataclass
@@ -48,6 +51,7 @@ class Args:
     checkpoint_path: Optional[str] = None
     seed: int = 1
     cuda: bool = False
+    wandb_dir: str = _DEFAULT_WANDB_DIR
 
     def __post_init__(self):
         self.name = f"{self.domain}-{self.task}-{self.seed}-{str(uuid.uuid4())}"
@@ -172,6 +176,7 @@ def train(args: Args):
         name=args.name,
         config=asdict(args),
         save_code=True,
+        dir=args.wandb_dir,
     )
 
     # TRY NOT TO MODIFY: seeding

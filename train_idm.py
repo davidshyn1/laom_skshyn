@@ -2,7 +2,10 @@ import math
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Optional
+
+import h5py
 
 import numpy as np
 import pyrallis
@@ -33,6 +36,21 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+_DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
+
+EXPERT_RETURNS = {
+    "cheetah-run": 823,
+    "walker-run": 749,
+    "hopper-hop": 253,
+    "humanoid-walk": 428,
+}
+
+
+def get_expert_return(hdf5_path: str) -> Optional[float]:
+    with h5py.File(hdf5_path, "r") as f:
+        key = f"{f.attrs['domain_name']}-{f.attrs['task_name']}"
+    return EXPERT_RETURNS.get(key, None)
 
 
 @dataclass
@@ -82,6 +100,7 @@ class Config:
     group: str = "idm"
     name: str = "idm"
     seed: int = 0
+    wandb_dir: str = _DEFAULT_WANDB_DIR
 
     idm: IDMConfig = field(default_factory=IDMConfig)
     bc: BCConfig = field(default_factory=BCConfig)
@@ -337,14 +356,17 @@ def train_bc(lam: IDMLabels, config: BCConfig):
         device=DEVICE,
         action_decoder=None,
     )
-    wandb.log(
-        {
-            "bc/eval_returns_mean": eval_returns.mean(),
-            "bc/eval_returns_std": eval_returns.std(),
-            "bc/epoch": epoch,
-            "bc/total_steps": total_steps,
-        }
-    )
+    expert_return = get_expert_return(config.data_path)
+    bc_log = {
+        "bc/eval_returns_mean": eval_returns.mean(),
+        "bc/eval_returns_std": eval_returns.std(),
+        "bc/epoch": epoch,
+        "bc/total_steps": total_steps,
+    }
+    if expert_return is not None:
+        bc_log["bc/eval_normalized_return_mean"] = eval_returns.mean() / expert_return
+        bc_log["bc/eval_normalized_return_std"] = eval_returns.std() / expert_return
+    wandb.log(bc_log)
     return actor
 
 
@@ -356,6 +378,7 @@ def train(config: Config):
         name=config.name,
         config=asdict(config),
         save_code=True,
+        dir=config.wandb_dir,
     )
     print(config.bc.eval_episodes)
 

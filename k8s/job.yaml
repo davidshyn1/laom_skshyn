@@ -1,0 +1,52 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: laom-train
+  namespace: p-aipr
+spec:
+  ttlSecondsAfterFinished: 3600   # 완료 1시간 후 자동 삭제
+  backoffLimit: 0                  # 실패 시 재시도 안 함
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-secret
+
+      containers:
+        - name: laom
+          image: ghcr.io/davidshyn1/laom_skshyn:latest
+          imagePullPolicy: Always
+          workingDir: /workspace
+
+          command: ["python", "train_laom.py"]
+          args:
+            - "--config"
+            - "configs/laom.yaml"
+
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "8"
+              memory: "64Gi"
+              nvidia.com/gpu: "1"
+
+          env:
+            - name: WANDB_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: wandb-secret
+                  key: api_key
+                  optional: true
+
+          volumeMounts:
+            - name: dataset
+              mountPath: /workspace/data
+
+      volumes:
+        - name: dataset
+          hostPath:
+            path: /yj_hdd/skshyn/lam/dataset   # 노드에 데이터가 있을 경우
+            type: Directory

@@ -1,5 +1,6 @@
 group: "idm-default"
 seed: 0
+wandb_dir: "/yj_hdd/skshyn/lam/wandb"
 
 idm:
   total_updates: 10000

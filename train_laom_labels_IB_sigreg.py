@@ -1,6 +1,7 @@
 import math
 import time
 import uuid
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
@@ -16,21 +17,21 @@ import torchinfo
 import wandb
 from pyrallis import field
 from torch.utils.data import DataLoader
-from torchvision.utils import make_grid
 from tqdm import trange
 
 from src.augmentations import Augmenter
-from src.nn import LAPO, ActionDecoder, Actor
+from src.nn import ActionDecoder, Actor, LAOMWithLabels
 from src.scheduler import linear_annealing_with_warmup
 from src.utils import (
     DCSInMemoryDataset,
-    DCSLAPOInMemoryDataset,
+    DCSLAOMInMemoryDataset,
+    DCSLAOMTrueActionsDataset,
     create_env_from_df,
     get_grad_norm,
     get_optim_groups,
     normalize_img,
     set_seed,
-    unnormalize_img,
+    soft_update,
 )
 
 torch.backends.cudnn.benchmark = True
@@ -55,21 +56,72 @@ def get_expert_return(hdf5_path: str) -> Optional[float]:
     return EXPERT_RETURNS.get(key, None)
 
 
+class SIGReg(nn.Module):
+    """Sketch Isotropic Gaussian Regularizer.
+
+    Measures deviation of the empirical distribution of embeddings from an
+    isotropic Gaussian by comparing their characteristic functions at random
+    projections. Reference: https://github.com/lucas-maes/le-wm
+    """
+
+    def __init__(self, knots: int = 17, num_proj: int = 1024):
+        super().__init__()
+        self.num_proj = num_proj
+        t = torch.linspace(0, 3, knots, dtype=torch.float32)
+        dt = 3.0 / (knots - 1)
+        weights = torch.full((knots,), 2 * dt, dtype=torch.float32)
+        weights[[0, -1]] = dt
+        window = torch.exp(-t.square() / 2.0)
+        self.register_buffer("t", t)
+        self.register_buffer("phi", window)
+        self.register_buffer("weights", weights * window)
+
+    def forward(self, proj: torch.Tensor) -> torch.Tensor:
+        """proj: (B, D) or (T, B, D)"""
+        if proj.dim() == 2:
+            proj = proj.unsqueeze(0)  # (1, B, D)
+        proj = proj.float()
+        A = torch.randn(proj.size(-1), self.num_proj, device=proj.device, dtype=torch.float32)
+        A = A.div_(A.norm(p=2, dim=0))
+        x_t = (proj @ A).unsqueeze(-1) * self.t  # (T, B, num_proj, knots)
+        err = (x_t.cos().mean(-3) - self.phi).square() + x_t.sin().mean(-3).square()
+        statistic = (err @ self.weights) * proj.size(-2)
+        return statistic.mean()
+
+
 @dataclass
-class LAPOConfig:
+class LAOMConfig:
     num_epochs: int = 100
     batch_size: int = 256
+    labeled_batch_size: int = 256
+    labeled_loss_coef: float = 0.05
+    kl_coef: float = 0.1
+    sigreg_coef: float = 0.09
+    sigreg_knots: int = 17
+    sigreg_num_proj: int = 1024
+    cosine_loss: bool = False
+    use_aug: bool = False
     future_obs_offset: int = 1
     learning_rate: float = 3e-4
     weight_decay: float = 0.0
     warmup_epochs: int = 5
     grad_norm: Optional[float] = None
-    latent_action_dim: int = 8
+    latent_action_dim: int = 256
+    act_head_dim: int = 512
+    act_head_dropout: float = 0.0
+    obs_head_dim: int = 512
+    obs_head_dropout: float = 0.0
     encoder_scale: int = 1
     encoder_num_res_blocks: int = 1
+    encoder_dropout: float = 0.0
+    encoder_norm_out: bool = True
     encoder_deep: bool = True
+    target_tau: float = 0.01
+    target_update_every: int = 1
     frame_stack: int = 3
     data_path: str = "data/test.hdf5"
+    eval_data_path: Optional[str] = None
+    labeled_data_path: str = "data/labeled_test.hdf5"
 
 
 @dataclass
@@ -101,7 +153,6 @@ class DecoderConfig:
     warmup_epochs: int = 5
     hidden_dim: int = 128
     use_aug: bool = True
-    data_path: str = "data/test.hdf5"
     dcs_backgrounds_path: str = "DAVIS/JPEGImages/480p"
     dcs_backgrounds_split: str = "train"
     eval_episodes: int = 10
@@ -111,31 +162,88 @@ class DecoderConfig:
 @dataclass
 class Config:
     project: str = "laom"
-    group: str = "lapo"
-    name: str = "lapo"
+    group: str = "laom-labels"
+    name: str = "laom-labels"
     seed: int = 0
     wandb_dir: str = _DEFAULT_WANDB_DIR
 
-    lapo: LAPOConfig = field(default_factory=LAPOConfig)
+    lapo: LAOMConfig = field(default_factory=LAOMConfig)
     bc: BCConfig = field(default_factory=BCConfig)
     decoder: DecoderConfig = field(default_factory=DecoderConfig)
 
     def __post_init__(self):
         self.name = f"{self.name}-{str(uuid.uuid4())}"
+        # coupling labeled dataset for laom pretraining and action decoder finetuning
+        self.decoder.data_path = self.lapo.labeled_data_path
 
 
-def train_lapo(config: LAPOConfig):
-    dataset = DCSLAPOInMemoryDataset(
+@torch.no_grad()
+def evaluate(lam, dataloader, device):
+    lam.eval()
+    total_samples, total_loss = 0, 0.0
+
+    for batch in dataloader:
+        obs, next_obs, _, actions, _, _ = [b.to(device) for b in batch]
+        obs = normalize_img(obs.permute((0, 3, 1, 2)))
+        next_obs = normalize_img(next_obs.permute((0, 3, 1, 2)))
+
+        with torch.autocast(device, dtype=torch.bfloat16):
+            _, _, pred_action, _ = lam(obs, next_obs, predict_true_act=True)
+            eval_loss = F.mse_loss(pred_action, actions, reduction="sum")
+
+        total_loss += eval_loss.item()
+        total_samples += obs.shape[0]
+
+    lam.train()
+    return total_loss / total_samples
+
+
+def train_laom(config: LAOMConfig):
+    dataset = DCSLAOMInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
     )
-    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
-    lapo = LAPO(
+    dataloader = DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+    )
+    labeled_dataset = DCSLAOMTrueActionsDataset(
+        config.labeled_data_path,
+        max_offset=config.future_obs_offset,
+        frame_stack=config.frame_stack,
+        device=DEVICE,
+    )
+    labeled_dataloader = DataLoader(labeled_dataset, batch_size=config.labeled_batch_size)
+
+    if config.eval_data_path is not None:
+        eval_dataset = DCSLAOMInMemoryDataset(
+            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device=DEVICE
+        )
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=config.batch_size,
+            shuffle=False,
+            drop_last=False,
+        )
+
+    lapo = LAOMWithLabels(
         shape=(3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
+        true_act_dim=dataset.act_dim,
         latent_act_dim=config.latent_action_dim,
+        act_head_dim=config.act_head_dim,
+        act_head_dropout=config.act_head_dropout,
+        obs_head_dim=config.obs_head_dim,
+        obs_head_dropout=config.obs_head_dropout,
         encoder_scale=config.encoder_scale,
         encoder_channels=(16, 32, 64, 128, 256) if config.encoder_deep else (16, 32, 32),
         encoder_num_res_blocks=config.encoder_num_res_blocks,
+        encoder_dropout=config.encoder_dropout,
+        encoder_norm_out=config.encoder_norm_out,
     ).to(DEVICE)
+
+    target_lapo = deepcopy(lapo)
+    for p in target_lapo.parameters():
+        p.requires_grad_(False)
 
     torchinfo.summary(
         lapo,
@@ -144,34 +252,97 @@ def train_lapo(config: LAPOConfig):
             (1, 3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
         ],
     )
-    optim = torch.optim.Adam(params=get_optim_groups(lapo, config.weight_decay), lr=config.learning_rate, fused=True)
+    optim = torch.optim.Adam(
+        params=get_optim_groups(lapo, config.weight_decay),
+        lr=config.learning_rate,
+        fused=True,
+    )
+    augmenter = Augmenter(dataset.img_hw)
+    sigreg = SIGReg(knots=config.sigreg_knots, num_proj=config.sigreg_num_proj).to(DEVICE)
+
+    state_probe = nn.Linear(math.prod(lapo.final_encoder_shape), dataset.state_dim).to(DEVICE)
+    state_probe_optim = torch.optim.Adam(state_probe.parameters(), lr=config.learning_rate)
+
+    act_linear_probe = nn.Linear(config.latent_action_dim, dataset.act_dim).to(DEVICE)
+    act_probe_optim = torch.optim.Adam(act_linear_probe.parameters(), lr=config.learning_rate)
+
+    print("Final encoder shape:", math.prod(lapo.final_encoder_shape))
+    state_act_linear_probe = nn.Linear(math.prod(lapo.final_encoder_shape), dataset.act_dim).to(DEVICE)
+    state_act_probe_optim = torch.optim.Adam(state_act_linear_probe.parameters(), lr=config.learning_rate)
 
     # scheduler setup
     total_updates = len(dataloader) * config.num_epochs
     warmup_updates = len(dataloader) * config.warmup_epochs
     scheduler = linear_annealing_with_warmup(optim, warmup_updates, total_updates)
 
-    linear_probe = nn.Linear(config.latent_action_dim, dataset.act_dim).to(DEVICE)
-    probe_optim = torch.optim.Adam(linear_probe.parameters(), lr=config.learning_rate)
-
     start_time = time.time()
+    total_iterations = 0
     total_tokens = 0
-    total_steps = 0
+
+    labeled_dataloader_iter = iter(labeled_dataloader)
     for epoch in trange(config.num_epochs, desc="Epochs"):
         lapo.train()
-        for batch in dataloader:
+        for i, batch in enumerate(dataloader):
             total_tokens += config.batch_size
-            total_steps += 1
+            total_iterations += 1
 
-            obs, next_obs, future_obs, actions, _ = [b.to(DEVICE) for b in batch]
+            obs, next_obs, future_obs, debug_actions, debug_states, _ = [b.to(DEVICE) for b in batch]
+
             obs = normalize_img(obs.permute((0, 3, 1, 2)))
             next_obs = normalize_img(next_obs.permute((0, 3, 1, 2)))
             future_obs = normalize_img(future_obs.permute((0, 3, 1, 2)))
 
+            if config.use_aug:
+                obs_aug = augmenter(obs)
+                future_obs_aug = augmenter(future_obs)
+                next_obs_aug = augmenter(next_obs)
+
             # update lapo
             with torch.autocast(DEVICE, dtype=torch.bfloat16):
-                pred_next_obs, latent_action = lapo(obs, future_obs)
-                loss = F.mse_loss(pred_next_obs, next_obs)
+                if config.use_aug:
+                    # using augmenter directly will not work due to bf16
+                    latent_next_obs, latent_action, obs_hidden, mu, log_var = lapo(obs_aug, future_obs_aug, stochastic=True)
+                else:
+                    latent_next_obs, latent_action, obs_hidden, mu, log_var = lapo(obs, future_obs, stochastic=True)
+
+                with torch.no_grad():
+                    if config.use_aug:
+                        next_obs_target = target_lapo.encoder(next_obs_aug).flatten(1)
+                    else:
+                        next_obs_target = target_lapo.encoder(next_obs).flatten(1)
+
+                if config.cosine_loss:
+                    loss0 = 1 - F.cosine_similarity(latent_next_obs, next_obs_target.detach(), dim=-1).mean()
+                else:
+                    loss0 = F.mse_loss(latent_next_obs, next_obs_target.detach())
+
+                kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).mean()
+
+            sigreg_loss = sigreg(mu)
+
+            # loss with true actions
+            labeled_batch = next(labeled_dataloader_iter)
+            label_obs, label_next_obs, label_future_obs, label_actions, _, _ = [b.to(DEVICE) for b in labeled_batch]
+
+            label_obs = normalize_img(label_obs.permute((0, 3, 1, 2)))
+            label_future_obs = normalize_img(label_future_obs.permute((0, 3, 1, 2)))
+            label_next_obs = normalize_img(label_next_obs.permute((0, 3, 1, 2)))
+
+            if config.use_aug:
+                label_obs_aug = augmenter(label_obs)
+                label_future_obs_aug = augmenter(label_future_obs)
+
+            # update lapo
+            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+                if config.use_aug:
+                    # using augmenter directly will not work due to bf16
+                    _, _, pred_action, _ = lapo(label_obs_aug, label_future_obs_aug, predict_true_act=True)
+                else:
+                    _, _, pred_action, _ = lapo(label_obs, label_future_obs, predict_true_act=True)
+
+                loss1 = F.mse_loss(pred_action, label_actions)
+    
+            loss = loss0 + config.labeled_loss_coef * loss1 + config.kl_coef * kl_loss + config.sigreg_coef * sigreg_loss
 
             optim.zero_grad(set_to_none=True)
             loss.backward()
@@ -179,41 +350,64 @@ def train_lapo(config: LAPOConfig):
                 torch.nn.utils.clip_grad_norm_(lapo.parameters(), max_norm=config.grad_norm)
             optim.step()
             scheduler.step()
+            if i % config.target_update_every == 0:
+                soft_update(target_lapo, lapo, tau=config.target_tau)
 
-            # update linear probe
+            # update state probe
             with torch.autocast(DEVICE, dtype=torch.bfloat16):
-                pred_action = linear_probe(latent_action.detach())
-                probe_loss = F.mse_loss(pred_action, actions)
+                pred_states = state_probe(obs_hidden.detach())
+                state_probe_loss = F.mse_loss(pred_states, debug_states)
 
-            probe_optim.zero_grad(set_to_none=True)
-            probe_loss.backward()
-            probe_optim.step()
+            state_probe_optim.zero_grad(set_to_none=True)
+            state_probe_loss.backward()
+            state_probe_optim.step()
+
+            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+                pred_action = act_linear_probe(latent_action.detach())
+                act_probe_loss = F.mse_loss(pred_action, debug_actions)
+
+            act_probe_optim.zero_grad(set_to_none=True)
+            act_probe_loss.backward()
+            act_probe_optim.step()
+
+            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+                state_pred_action = state_act_linear_probe(obs_hidden.detach())
+                state_act_probe_loss = F.mse_loss(state_pred_action, debug_actions)
+
+            state_act_probe_optim.zero_grad(set_to_none=True)
+            state_act_probe_loss.backward()
+            state_act_probe_optim.step()
 
             wandb.log(
                 {
-                    "lapo/mse_loss": loss.item(),
-                    "lapo/action_probe_mse_loss": probe_loss.item(),
+                    "lapo/total_loss": loss.item(),
+                    "lapo/mse_loss": loss0.item(),
+                    "lapo/true_action_mse_loss": loss1.item(),
+                    "lapo/kl_loss": kl_loss.item(),
+                    "lapo/sigreg_loss": sigreg_loss.item(),
+                    "lapo/state_probe_mse_loss": state_probe_loss.item(),
+                    "lapo/action_probe_mse_loss": act_probe_loss.item(),
+                    "lapo/state_action_probe_mse_loss": state_act_probe_loss.item(),
                     "lapo/throughput": total_tokens / (time.time() - start_time),
                     "lapo/learning_rate": scheduler.get_last_lr()[0],
                     "lapo/grad_norm": get_grad_norm(lapo).item(),
+                    "lapo/target_obs_norm": torch.norm(next_obs_target, p=2, dim=-1).mean().item(),
+                    "lapo/online_obs_norm": torch.norm(latent_next_obs, p=2, dim=-1).mean().item(),
+                    "lapo/latent_act_norm": torch.norm(latent_action, p=2, dim=-1).mean().item(),
                     "lapo/epoch": epoch,
-                    "lapo/total_steps": total_tokens,
+                    "lapo/total_steps": total_iterations,
                 }
             )
 
-        # logging reconstruction of next state
-        obs_example = [unnormalize_img(next_obs[0][i : i + 3]) for i in range(0, 3 * config.frame_stack, 3)]
-        next_obs_example = [unnormalize_img(pred_next_obs[0][i : i + 3]) for i in range(0, 3 * config.frame_stack, 3)]
-        reconstruction_img = make_grid(obs_example + next_obs_example, nrow=config.frame_stack, padding=1)
-        reconstruction_img = reconstruction_img.permute((1, 2, 0))
-        reconstruction_img = wandb.Image(reconstruction_img.cpu().numpy(), caption="Top: True, Bottom: Pred")
-        wandb.log(
-            {
-                "lapo/next_obs_pred": reconstruction_img,
-                "lapo/epoch": epoch,
-                "lapo/total_steps": total_tokens,
-            }
-        )
+        if config.eval_data_path is not None:
+            eval_mse_loss = evaluate(lapo, eval_dataloader, device=DEVICE)
+            wandb.log(
+                {
+                    "lapo/eval_true_action_mse_loss": eval_mse_loss,
+                    "lapo/epoch": epoch,
+                    "lapo/total_steps": total_iterations,
+                }
+            )
 
     return lapo
 
@@ -243,7 +437,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
     return np.array(returns)
 
 
-def train_bc(lam: LAPO, config: BCConfig):
+def train_bc(lam: LAOMWithLabels, config: BCConfig):
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device=DEVICE)
     dataloader = DataLoader(
         dataset,
@@ -283,7 +477,7 @@ def train_bc(lam: LAPO, config: BCConfig):
     # for debug
     print("Latent action dim:", num_actions)
     act_decoder = nn.Sequential(
-        nn.Linear(num_actions, 128), nn.ReLU(), nn.Linear(128, 128), nn.ReLU(), nn.Linear(128, dataset.act_dim)
+        nn.Linear(num_actions, 256), nn.ReLU(), nn.Linear(256, 256), nn.ReLU(), nn.Linear(256, dataset.act_dim)
     ).to(DEVICE)
 
     act_decoder_optim = torch.optim.AdamW(params=act_decoder.parameters(), lr=config.learning_rate, fused=True)
@@ -485,7 +679,7 @@ def train(config: Config):
     )
     set_seed(config.seed)
     # stage 1: pretraining lapo on unlabeled dataset
-    lapo = train_lapo(config=config.lapo)
+    lapo = train_laom(config=config.lapo)
     # stage 2: pretraining bc on latent actions
     actor = train_bc(lam=lapo, config=config.bc)
     # stage 3: finetune on labeles ground-truth actions

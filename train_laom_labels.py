@@ -2,8 +2,11 @@ import math
 import time
 import uuid
 from copy import deepcopy
+from pathlib import Path
 from dataclasses import asdict, dataclass
 from typing import Optional
+
+import h5py
 
 import numpy as np
 import pyrallis
@@ -36,6 +39,21 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+_DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
+
+EXPERT_RETURNS = {
+    "cheetah-run": 823,
+    "walker-run": 749,
+    "hopper-hop": 253,
+    "humanoid-walk": 428,
+}
+
+
+def get_expert_return(hdf5_path: str) -> Optional[float]:
+    with h5py.File(hdf5_path, "r") as f:
+        key = f"{f.attrs['domain_name']}-{f.attrs['task_name']}"
+    return EXPERT_RETURNS.get(key, None)
 
 
 @dataclass
@@ -110,6 +128,7 @@ class Config:
     group: str = "laom-labels"
     name: str = "laom-labels"
     seed: int = 0
+    wandb_dir: str = _DEFAULT_WANDB_DIR
 
     lapo: LAOMConfig = field(default_factory=LAOMConfig)
     bc: BCConfig = field(default_factory=BCConfig)
@@ -485,14 +504,17 @@ def train_bc(lam: LAOMWithLabels, config: BCConfig):
         device=DEVICE,
         action_decoder=act_decoder,
     )
-    wandb.log(
-        {
-            "bc/eval_returns_mean": eval_returns.mean(),
-            "bc/eval_returns_std": eval_returns.std(),
-            "bc/epoch": epoch,
-            "bc/total_steps": total_steps,
-        }
-    )
+    expert_return = get_expert_return(config.data_path)
+    bc_log = {
+        "bc/eval_returns_mean": eval_returns.mean(),
+        "bc/eval_returns_std": eval_returns.std(),
+        "bc/epoch": epoch,
+        "bc/total_steps": total_steps,
+    }
+    if expert_return is not None:
+        bc_log["bc/eval_normalized_return_mean"] = eval_returns.mean() / expert_return
+        bc_log["bc/eval_normalized_return_std"] = eval_returns.std() / expert_return
+    wandb.log(bc_log)
 
     return actor
 
@@ -586,14 +608,17 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         device=DEVICE,
         action_decoder=action_decoder,
     )
-    wandb.log(
-        {
-            "decoder/eval_returns_mean": eval_returns.mean(),
-            "decoder/eval_returns_std": eval_returns.std(),
-            "decoder/epoch": epoch,
-            "decoder/total_steps": total_steps,
-        }
-    )
+    expert_return = get_expert_return(config.data_path)
+    decoder_log = {
+        "decoder/eval_returns_mean": eval_returns.mean(),
+        "decoder/eval_returns_std": eval_returns.std(),
+        "decoder/epoch": epoch,
+        "decoder/total_steps": total_steps,
+    }
+    if expert_return is not None:
+        decoder_log["decoder/eval_normalized_return_mean"] = eval_returns.mean() / expert_return
+        decoder_log["decoder/eval_normalized_return_std"] = eval_returns.std() / expert_return
+    wandb.log(decoder_log)
 
     return action_decoder
 
@@ -606,6 +631,7 @@ def train(config: Config):
         name=config.name,
         config=asdict(config),
         save_code=True,
+        dir=config.wandb_dir,
     )
     set_seed(config.seed)
     # stage 1: pretraining lapo on unlabeled dataset
