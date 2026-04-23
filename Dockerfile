@@ -29,15 +29,14 @@ ENV PATH=${CONDA_DIR}/bin:$PATH
 WORKDIR /workspace
 
 COPY environment.yaml /tmp/environment.yaml
+COPY requirements.txt /tmp/requirements.txt
 RUN sed -i '/^prefix:/d' /tmp/environment.yaml
 
 # mamba is pre-installed in Miniforge and significantly faster than conda
-RUN mamba env create -f /tmp/environment.yaml && \
+RUN sed -i 's|-r requirements.txt|-r /tmp/requirements.txt|' /tmp/environment.yaml && \
+    mamba env create -f /tmp/environment.yaml && \
     mamba clean -afy
 
 ENV PATH=/opt/conda/envs/laom/bin:$PATH
-
-RUN pip uninstall -y opencv opencv-python 2>/dev/null || true && \
-    pip install --no-cache-dir --upgrade --force-reinstall opencv-python
 
 COPY . /workspace

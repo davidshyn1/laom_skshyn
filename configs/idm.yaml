@@ -18,8 +18,8 @@ idm:
   encoder_dropout: 0.0
   frame_stack: 3
   # TODO: change to your data path, eval is optional
-  data_path: "data/example-dataset.hdf5"
-  eval_data_path: "data/example-dataset.hdf5"
+  data_path: "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
+  eval_data_path: "/yj_hdd/skshyn/lam/dataset/data/walker-run-10x-test.hdf5"
 
 bc:
   num_epochs: 10
@@ -34,8 +34,8 @@ bc:
   use_aug: False
   frame_stack: 3
   # TODO: change to your data and DAVIS path
-  data_path: "data/example-dataset.hdf5"
-  dcs_backgrounds_path: "DAVIS/JPEGImages/480p"
+  data_path: "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
+  dcs_backgrounds_path: "/yj_hdd/skshyn/lam/dataset/DAVIS/JPEGImages/480p"
   dcs_backgrounds_split: "train"
   eval_episodes: 25
   eval_seed: 0

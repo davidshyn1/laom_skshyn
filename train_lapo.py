@@ -40,6 +40,9 @@ torch.backends.cudnn.allow_tf32 = True
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
+_DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
+_DEFAULT_LABELED_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-labeled-1000xtraj125.hdf5"
+_DEFAULT_DAVIS_PATH = "/yj_hdd/skshyn/lam/dataset/DAVIS/JPEGImages/480p"
 
 EXPERT_RETURNS = {
     "cheetah-run": 823,
@@ -69,7 +72,7 @@ class LAPOConfig:
     encoder_num_res_blocks: int = 1
     encoder_deep: bool = True
     frame_stack: int = 3
-    data_path: str = "data/test.hdf5"
+    data_path: str = _DEFAULT_TRAIN_DATA_PATH
 
 
 @dataclass
@@ -85,8 +88,8 @@ class BCConfig:
     dropout: float = 0.0
     use_aug: bool = True
     frame_stack: int = 3
-    data_path: str = "data/test.hdf5"
-    dcs_backgrounds_path: str = "DAVIS/JPEGImages/480p"
+    data_path: str = _DEFAULT_TRAIN_DATA_PATH
+    dcs_backgrounds_path: str = _DEFAULT_DAVIS_PATH
     dcs_backgrounds_split: str = "train"
     eval_episodes: int = 10
     eval_seed: int = 0
@@ -101,8 +104,8 @@ class DecoderConfig:
     warmup_epochs: int = 5
     hidden_dim: int = 128
     use_aug: bool = True
-    data_path: str = "data/test.hdf5"
-    dcs_backgrounds_path: str = "DAVIS/JPEGImages/480p"
+    data_path: str = _DEFAULT_LABELED_DATA_PATH
+    dcs_backgrounds_path: str = _DEFAULT_DAVIS_PATH
     dcs_backgrounds_split: str = "train"
     eval_episodes: int = 10
     eval_seed: int = 0

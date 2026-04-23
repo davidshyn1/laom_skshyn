@@ -1,4 +1,3 @@
-torchvision
 torchinfo
 torcheval
 opencv-python
@@ -12,10 +11,7 @@ Pillow
 pyrallis==0.3.1
 h5py==3.10.0
 tqdm
-stable_baselines3
+stable-baselines3
 sb3-contrib==2.4.0
 vector-quantize-pytorch==1.22.16
 wandb==0.19.9
-
-
- 
