@@ -1,4 +1,5 @@
 import math
+import os
 import time
 import uuid
 from dataclasses import asdict, dataclass
@@ -37,7 +38,13 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+_GPU_ID = int(os.environ.get("GPU_ID", "0"))
+if torch.cuda.is_available():
+    if _GPU_ID < 0 or _GPU_ID >= torch.cuda.device_count():
+        raise ValueError(f"Invalid GPU_ID={_GPU_ID}. Available GPU count: {torch.cuda.device_count()}")
+    DEVICE = f"cuda:{_GPU_ID}"
+else:
+    DEVICE = "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
 _DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
@@ -128,10 +135,11 @@ class Config:
 
 
 def train_lapo(config: LAPOConfig):
+    pin_memory = DEVICE == "cuda"
     dataset = DCSLAPOInMemoryDataset(
-        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
+        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
-    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, pin_memory=pin_memory)
     lapo = LAPO(
         shape=(3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
         latent_act_dim=config.latent_action_dim,
@@ -247,12 +255,14 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAPO, config: BCConfig):
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device=DEVICE)
+    pin_memory = DEVICE == "cuda"
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
         drop_last=True,
+        pin_memory=pin_memory,
     )
     eval_env = create_env_from_df(
         config.data_path,
@@ -377,11 +387,13 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device=DEVICE)
+    pin_memory = DEVICE == "cuda"
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
+        pin_memory=pin_memory,
     )
     # to make equal number of updates for all labeled datasets which vary in size
     num_epochs = config.total_updates // len(dataloader)

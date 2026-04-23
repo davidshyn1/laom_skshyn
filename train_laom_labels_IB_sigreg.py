@@ -1,4 +1,5 @@
 import math
+import os
 import time
 import uuid
 from copy import deepcopy
@@ -38,7 +39,13 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+_GPU_ID = int(os.environ.get("GPU_ID", "0"))
+if torch.cuda.is_available():
+    if _GPU_ID < 0 or _GPU_ID >= torch.cuda.device_count():
+        raise ValueError(f"Invalid GPU_ID={_GPU_ID}. Available GPU count: {torch.cuda.device_count()}")
+    DEVICE = f"cuda:{_GPU_ID}"
+else:
+    DEVICE = "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
 _DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
@@ -203,31 +210,34 @@ def evaluate(lam, dataloader, device):
 
 
 def train_laom(config: LAOMConfig):
+    pin_memory = DEVICE == "cuda"
     dataset = DCSLAOMInMemoryDataset(
-        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
+        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
+        pin_memory=pin_memory,
     )
     labeled_dataset = DCSLAOMTrueActionsDataset(
         config.labeled_data_path,
         max_offset=config.future_obs_offset,
         frame_stack=config.frame_stack,
-        device=DEVICE,
+        device="cpu",
     )
-    labeled_dataloader = DataLoader(labeled_dataset, batch_size=config.labeled_batch_size)
+    labeled_dataloader = DataLoader(labeled_dataset, batch_size=config.labeled_batch_size, pin_memory=pin_memory)
 
     if config.eval_data_path is not None:
         eval_dataset = DCSLAOMInMemoryDataset(
-            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device=DEVICE
+            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device="cpu"
         )
         eval_dataloader = DataLoader(
             eval_dataset,
             batch_size=config.batch_size,
             shuffle=False,
             drop_last=False,
+            pin_memory=pin_memory,
         )
 
     lapo = LAOMWithLabels(
@@ -442,12 +452,14 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAOMWithLabels, config: BCConfig):
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device=DEVICE)
+    pin_memory = DEVICE == "cuda"
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
         drop_last=True,
+        pin_memory=pin_memory,
     )
     eval_env = create_env_from_df(
         config.data_path,
@@ -572,11 +584,13 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device=DEVICE)
+    pin_memory = DEVICE == "cuda"
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
+        pin_memory=pin_memory,
     )
     # to make equal number of updates for all labeled datasets which vary in size
     num_epochs = config.total_updates // len(dataloader)

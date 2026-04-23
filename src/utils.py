@@ -42,12 +42,27 @@ def soft_update(target, source, tau=1e-3):
         target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
 
 
+def _infer_img_hw_from_df(df):
+    first_traj_key = next(iter(df.keys()), None)
+    if first_traj_key is None:
+        raise ValueError("HDF5 dataset has no trajectories; cannot infer image size.")
+    obs = df[first_traj_key]["obs"]
+    if obs.ndim < 3:
+        raise ValueError(f"Unexpected obs shape {obs.shape}; expected at least (T, H, W, ...).")
+    return int(obs.shape[1])
+
+
+def _get_img_hw(df):
+    # Some datasets do not carry the top-level img_hw attribute.
+    return int(df.attrs["img_hw"]) if "img_hw" in df.attrs else _infer_img_hw_from_df(df)
+
+
 class DCSInMemoryDataset(Dataset):
     def __init__(self, hdf5_path, frame_stack=1, device="cpu"):
         with h5py.File(hdf5_path, "r") as df:
             self.observations = [torch.tensor(df[traj]["obs"][:], device=device) for traj in df.keys()]
             self.actions = [torch.tensor(df[traj]["actions"][:], device=device) for traj in df.keys()]
-            self.img_hw = df.attrs["img_hw"]
+            self.img_hw = _get_img_hw(df)
             self.act_dim = self.actions[0][0].shape[-1]
 
         self.frame_stack = frame_stack
@@ -89,7 +104,7 @@ class DCSLAOMInMemoryDataset(Dataset):
             self.observations = [torch.tensor(df[traj]["obs"][:], device=device) for traj in df.keys()]
             self.actions = [torch.tensor(df[traj]["actions"][:], device=device) for traj in df.keys()]
             self.states = [torch.tensor(df[traj]["states"][:], device=device) for traj in df.keys()]
-            self.img_hw = df.attrs["img_hw"]
+            self.img_hw = _get_img_hw(df)
             self.act_dim = self.actions[0][0].shape[-1]
             self.state_dim = self.states[0][0].shape[-1]
 
@@ -137,7 +152,7 @@ class DCSLAOMTrueActionsDataset(IterableDataset):
             self.observations = [torch.tensor(df[traj]["obs"][:], device=device) for traj in df.keys()]
             self.actions = [torch.tensor(df[traj]["actions"][:], device=device) for traj in df.keys()]
             self.states = [torch.tensor(df[traj]["states"][:], device=device) for traj in df.keys()]
-            self.img_hw = df.attrs["img_hw"]
+            self.img_hw = _get_img_hw(df)
             self.act_dim = self.actions[0][0].shape[-1]
             self.state_dim = self.states[0][0].shape[-1]
 
@@ -225,6 +240,7 @@ def create_env_from_df(
     difficulty=None,
 ):
     with h5py.File(hdf5_path, "r") as df:
+        img_hw = _get_img_hw(df)
         dm_env = suite.load(
             domain_name=df.attrs["domain_name"],
             task_name=df.attrs["task_name"],
@@ -233,7 +249,7 @@ def create_env_from_df(
             background_dataset_path=backgrounds_path,
             background_dataset_videos=backgrounds_split,
             pixels_only=pixels_only,
-            render_kwargs=dict(height=df.attrs["img_hw"], width=df.attrs["img_hw"]),
+            render_kwargs=dict(height=img_hw, width=img_hw),
         )
         env = DmControlCompatibilityV0(dm_env)
         env = gym.wrappers.ClipAction(env)

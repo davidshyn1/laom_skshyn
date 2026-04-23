@@ -38,5 +38,16 @@ RUN sed -i 's|-r requirements.txt|-r /tmp/requirements.txt|' /tmp/environment.ya
     mamba clean -afy
 
 ENV PATH=/opt/conda/envs/laom/bin:$PATH
+ENV MUJOCO_GL=egl \
+    PYOPENGL_PLATFORM=egl \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics
+
+RUN pip install --upgrade --force-reinstall \
+    numpy \
+    pandas \
+    scipy \
+    scikit-image \
+    h5py \
+    opencv-python
 
 COPY . /workspace
