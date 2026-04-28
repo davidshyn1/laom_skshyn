@@ -46,6 +46,7 @@ if torch.cuda.is_available():
     DEVICE = f"cuda:{_GPU_ID}"
 else:
     DEVICE = "cpu"
+DEVICE_TYPE = "cuda" if DEVICE.startswith("cuda") else "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
 _DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
@@ -210,7 +211,7 @@ def evaluate(lam, dataloader, device):
 
 
 def train_laom(config: LAOMConfig):
-    pin_memory = DEVICE == "cuda"
+    pin_memory = DEVICE_TYPE == "cuda"
     dataset = DCSLAOMInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
@@ -312,7 +313,7 @@ def train_laom(config: LAOMConfig):
                 next_obs_aug = augmenter(next_obs)
 
             # update lapo
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 if config.use_aug:
                     # using augmenter directly will not work due to bf16
                     latent_next_obs, latent_action, obs_hidden, mu, log_var = lapo(obs_aug, future_obs_aug, stochastic=True)
@@ -347,7 +348,7 @@ def train_laom(config: LAOMConfig):
                 label_future_obs_aug = augmenter(label_future_obs)
 
             # update lapo
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 if config.use_aug:
                     # using augmenter directly will not work due to bf16
                     _, _, pred_action, _ = lapo(label_obs_aug, label_future_obs_aug, predict_true_act=True)
@@ -368,7 +369,7 @@ def train_laom(config: LAOMConfig):
                 soft_update(target_lapo, lapo, tau=config.target_tau)
 
             # update state probe
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 pred_states = state_probe(obs_hidden.detach())
                 state_probe_loss = F.mse_loss(pred_states, debug_states)
 
@@ -376,7 +377,7 @@ def train_laom(config: LAOMConfig):
             state_probe_loss.backward()
             state_probe_optim.step()
 
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 pred_action = act_linear_probe(latent_action.detach())
                 act_probe_loss = F.mse_loss(pred_action, debug_actions)
 
@@ -384,7 +385,7 @@ def train_laom(config: LAOMConfig):
             act_probe_loss.backward()
             act_probe_optim.step()
 
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 state_pred_action = state_act_linear_probe(obs_hidden.detach())
                 state_act_probe_loss = F.mse_loss(state_pred_action, debug_actions)
 
@@ -452,7 +453,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAOMWithLabels, config: BCConfig):
-    pin_memory = DEVICE == "cuda"
+    pin_memory = DEVICE_TYPE == "cuda"
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -525,7 +526,7 @@ def train_bc(lam: LAOMWithLabels, config: BCConfig):
                 obs = augmenter(obs)
 
             # update actor
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 pred_actions, _ = actor(obs)
                 loss = F.mse_loss(pred_actions, target_actions)
 
@@ -535,7 +536,7 @@ def train_bc(lam: LAOMWithLabels, config: BCConfig):
             scheduler.step()
 
             # optimizing the probe
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 pred_true_actions = act_decoder(pred_actions.detach())
                 decoder_loss = F.mse_loss(pred_true_actions, true_actions)
 
@@ -584,7 +585,7 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    pin_memory = DEVICE == "cuda"
+    pin_memory = DEVICE_TYPE == "cuda"
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -639,7 +640,7 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
                 obs = augmenter(obs)
 
             # update actor
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 with torch.no_grad():
                     latent_actions, obs_emb = actor(obs)
                 pred_actions = action_decoder(obs_emb, latent_actions)
