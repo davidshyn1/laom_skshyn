@@ -111,6 +111,7 @@ class Config:
     name: str = "idm"
     seed: int = 0
     wandb_dir: str = _DEFAULT_WANDB_DIR
+    model_save_path: Optional[str] = None
 
     idm: IDMConfig = field(default_factory=IDMConfig)
     bc: BCConfig = field(default_factory=BCConfig)
@@ -141,7 +142,7 @@ def evaluate(idm, dataloader, device):
 
 
 def train_idm(config: IDMConfig):
-    pin_memory = False
+    pin_memory = True
     dataset = DCSLAOMInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
@@ -281,7 +282,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: IDMLabels, config: BCConfig):
-    pin_memory = False
+    pin_memory = True
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -405,6 +406,12 @@ def train(config: Config):
     idm = train_idm(config=config.idm)
     # stage 2: pretraining bc on idm labeled actions
     actor = train_bc(lam=idm, config=config.bc)
+
+    if config.model_save_path:
+        save_path = Path(config.model_save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"idm": idm.state_dict(), "actor": actor.state_dict()}, save_path)
+        print(f"Saved model checkpoint to: {save_path}")
 
     run.finish()
     return idm, actor

@@ -125,6 +125,7 @@ class Config:
     name: str = "lapo"
     seed: int = 0
     wandb_dir: str = _DEFAULT_WANDB_DIR
+    model_save_path: Optional[str] = None
 
     lapo: LAPOConfig = field(default_factory=LAPOConfig)
     bc: BCConfig = field(default_factory=BCConfig)
@@ -135,7 +136,7 @@ class Config:
 
 
 def train_lapo(config: LAPOConfig):
-    pin_memory = False
+    pin_memory = True
     dataset = DCSLAPOInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
@@ -257,7 +258,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAPO, config: BCConfig):
-    pin_memory = False
+    pin_memory = True
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -390,7 +391,7 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    pin_memory = False
+    pin_memory = True
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -509,6 +510,15 @@ def train(config: Config):
     actor = train_bc(lam=lapo, config=config.bc)
     # stage 3: finetune on labeles ground-truth actions
     action_decoder = train_act_decoder(actor=actor, config=config.decoder, bc_config=config.bc)
+
+    if config.model_save_path:
+        save_path = Path(config.model_save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {"lapo": lapo.state_dict(), "actor": actor.state_dict(), "action_decoder": action_decoder.state_dict()},
+            save_path,
+        )
+        print(f"Saved model checkpoint to: {save_path}")
 
     run.finish()
     return lapo, actor, action_decoder
