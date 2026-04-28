@@ -135,11 +135,13 @@ class Config:
 
 
 def train_lapo(config: LAPOConfig):
-    pin_memory = DEVICE == "cuda"
+    pin_memory = False
     dataset = DCSLAPOInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
-    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, pin_memory=pin_memory)
+    dataloader = DataLoader(
+        dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, pin_memory=pin_memory, num_workers=8
+    )
     lapo = LAPO(
         shape=(3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
         latent_act_dim=config.latent_action_dim,
@@ -255,7 +257,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAPO, config: BCConfig):
-    pin_memory = DEVICE == "cuda"
+    pin_memory = False
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -263,6 +265,7 @@ def train_bc(lam: LAPO, config: BCConfig):
         shuffle=True,
         drop_last=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     eval_env = create_env_from_df(
         config.data_path,
@@ -387,13 +390,14 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    pin_memory = DEVICE == "cuda"
+    pin_memory = False
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     # to make equal number of updates for all labeled datasets which vary in size
     num_epochs = config.total_updates // len(dataloader)

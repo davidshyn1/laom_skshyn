@@ -176,7 +176,7 @@ def evaluate(lam, dataloader, device):
 
 
 def train_laom(config: LAOMConfig):
-    pin_memory = DEVICE_TYPE == "cuda"
+    pin_memory = False
     dataset = DCSLAOMInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
@@ -185,6 +185,7 @@ def train_laom(config: LAOMConfig):
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     labeled_dataset = DCSLAOMTrueActionsDataset(
         config.labeled_data_path,
@@ -192,7 +193,9 @@ def train_laom(config: LAOMConfig):
         frame_stack=config.frame_stack,
         device="cpu",
     )
-    labeled_dataloader = DataLoader(labeled_dataset, batch_size=config.labeled_batch_size, pin_memory=pin_memory)
+    labeled_dataloader = DataLoader(
+        labeled_dataset, batch_size=config.labeled_batch_size, pin_memory=pin_memory, num_workers=8
+    )
 
     if config.eval_data_path is not None:
         eval_dataset = DCSLAOMInMemoryDataset(
@@ -204,6 +207,7 @@ def train_laom(config: LAOMConfig):
             shuffle=False,
             drop_last=False,
             pin_memory=pin_memory,
+            num_workers=8,
         )
 
     lapo = LAOMWithLabels(
@@ -414,7 +418,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAOMWithLabels, config: BCConfig):
-    pin_memory = DEVICE_TYPE == "cuda"
+    pin_memory = False
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -422,6 +426,7 @@ def train_bc(lam: LAOMWithLabels, config: BCConfig):
         shuffle=True,
         drop_last=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     eval_env = create_env_from_df(
         config.data_path,
@@ -546,13 +551,14 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    pin_memory = DEVICE_TYPE == "cuda"
+    pin_memory = False
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     # to make equal number of updates for all labeled datasets which vary in size
     num_epochs = config.total_updates // len(dataloader)

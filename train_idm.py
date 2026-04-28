@@ -141,7 +141,7 @@ def evaluate(idm, dataloader, device):
 
 
 def train_idm(config: IDMConfig):
-    pin_memory = DEVICE == "cuda"
+    pin_memory = False
     dataset = DCSLAOMInMemoryDataset(
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
@@ -150,6 +150,7 @@ def train_idm(config: IDMConfig):
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     num_epochs = config.total_updates // len(dataloader)
 
@@ -163,6 +164,7 @@ def train_idm(config: IDMConfig):
             shuffle=False,
             drop_last=False,
             pin_memory=pin_memory,
+            num_workers=8,
         )
 
     idm = IDMLabels(
@@ -279,7 +281,7 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: IDMLabels, config: BCConfig):
-    pin_memory = DEVICE == "cuda"
+    pin_memory = False
     dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
     dataloader = DataLoader(
         dataset,
@@ -287,6 +289,7 @@ def train_bc(lam: IDMLabels, config: BCConfig):
         shuffle=True,
         drop_last=True,
         pin_memory=pin_memory,
+        num_workers=8,
     )
     eval_env = create_env_from_df(
         config.data_path,
