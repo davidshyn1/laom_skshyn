@@ -69,7 +69,7 @@ def get_expert_return(hdf5_path: str) -> Optional[float]:
 @dataclass
 class LAOMConfig:
     num_epochs: int = 150
-    batch_size: int = 2048
+    batch_size: int = 1024
     use_aug: bool = True
     future_obs_offset: int = 1
     learning_rate: float = 3e-4
