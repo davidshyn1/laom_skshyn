@@ -4,7 +4,7 @@ wandb_dir: "/home/irteam/data-vol1/wandb"
 
 idm:
   total_updates: 10000
-  batch_size: 1024
+  batch_size: 512
   use_aug: False
   future_obs_offset: 1
   learning_rate: 0.0001
