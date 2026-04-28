@@ -17,3 +17,9 @@ dependencies:
   - ffmpeg
   - pip:
       - -r requirements.txt
+      - numpy
+      - pandas
+      - scipy
+      - scikit-image
+      - h5py
+      - opencv-python
