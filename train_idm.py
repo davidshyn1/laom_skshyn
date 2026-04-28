@@ -150,7 +150,7 @@ def train_idm(config: IDMConfig):
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
-        num_workers=2,
+        num_workers=0,
     )
     num_epochs = config.total_updates // len(dataloader)
 
@@ -164,7 +164,7 @@ def train_idm(config: IDMConfig):
             shuffle=False,
             drop_last=False,
             pin_memory=pin_memory,
-            num_workers=2,
+            num_workers=0,
         )
 
     idm = IDMLabels(
@@ -289,7 +289,7 @@ def train_bc(lam: IDMLabels, config: BCConfig):
         shuffle=True,
         drop_last=True,
         pin_memory=pin_memory,
-        num_workers=2,
+        num_workers=0,
     )
     eval_env = create_env_from_df(
         config.data_path,
