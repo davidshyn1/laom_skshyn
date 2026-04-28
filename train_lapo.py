@@ -140,7 +140,7 @@ def train_lapo(config: LAPOConfig):
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
     )
     dataloader = DataLoader(
-        dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, pin_memory=pin_memory, num_workers=8
+        dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, pin_memory=pin_memory, num_workers=2
     )
     lapo = LAPO(
         shape=(3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
@@ -265,7 +265,7 @@ def train_bc(lam: LAPO, config: BCConfig):
         shuffle=True,
         drop_last=True,
         pin_memory=pin_memory,
-        num_workers=8,
+        num_workers=2,
     )
     eval_env = create_env_from_df(
         config.data_path,
@@ -397,7 +397,7 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
-        num_workers=8,
+        num_workers=2,
     )
     # to make equal number of updates for all labeled datasets which vary in size
     num_epochs = config.total_updates // len(dataloader)

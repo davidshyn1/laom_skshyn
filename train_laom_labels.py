@@ -182,7 +182,7 @@ def train_laom(config: LAOMConfig):
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
-        num_workers=8,
+        num_workers=2,
     )
     labeled_dataset = DCSLAOMTrueActionsDataset(
         config.labeled_data_path,
@@ -191,7 +191,7 @@ def train_laom(config: LAOMConfig):
         device="cpu",
     )
     labeled_dataloader = DataLoader(
-        labeled_dataset, batch_size=config.labeled_batch_size, pin_memory=pin_memory, num_workers=8
+        labeled_dataset, batch_size=config.labeled_batch_size, pin_memory=pin_memory, num_workers=2
     )
 
     if config.eval_data_path is not None:
@@ -204,7 +204,7 @@ def train_laom(config: LAOMConfig):
             shuffle=False,
             drop_last=False,
             pin_memory=pin_memory,
-            num_workers=8,
+            num_workers=2,
         )
 
     lapo = LAOMWithLabels(
@@ -420,7 +420,7 @@ def train_bc(lam: LAOMWithLabels, config: BCConfig):
         shuffle=True,
         drop_last=True,
         pin_memory=pin_memory,
-        num_workers=8,
+        num_workers=2,
     )
     eval_env = create_env_from_df(
         config.data_path,
@@ -552,7 +552,7 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         batch_size=config.batch_size,
         shuffle=True,
         pin_memory=pin_memory,
-        num_workers=8,
+        num_workers=2,
     )
     # to make equal number of updates for all labeled datasets which vary in size
     num_epochs = config.total_updates // len(dataloader)
