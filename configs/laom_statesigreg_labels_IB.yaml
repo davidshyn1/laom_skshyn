@@ -8,7 +8,7 @@ lapo:
   batch_size: 1024
   labeled_batch_size: 256
   labeled_loss_coef: 0.001
-  kl_coef: 1.0
+  kl_coef: 0.1
   sigreg_coef: 0.09
   sigreg_knots: 17
   sigreg_num_proj: 1024
