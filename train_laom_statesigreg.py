@@ -1,0 +1,222 @@
+import os
+import time
+import uuid
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Optional
+
+import pyrallis
+import torch
+import torch.nn.functional as F
+import torchinfo
+import wandb
+from pyrallis import field
+from torch.utils.data import DataLoader
+from tqdm import trange
+
+from src.augmentations import Augmenter
+from src.nn import LAOM
+from src.scheduler import linear_annealing_with_warmup
+from src.utils import DCSLAOMInMemoryDataset, get_grad_norm, get_optim_groups, normalize_img, set_seed
+from train_laom import BCConfig, DecoderConfig, train_act_decoder, train_bc
+
+torch.backends.cudnn.benchmark = True
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
+_GPU_ID = int(os.environ.get("GPU_ID", "0"))
+if torch.cuda.is_available():
+    if _GPU_ID < 0 or _GPU_ID >= torch.cuda.device_count():
+        raise ValueError(f"Invalid GPU_ID={_GPU_ID}. Available GPU count: {torch.cuda.device_count()}")
+    DEVICE = f"cuda:{_GPU_ID}"
+else:
+    DEVICE = "cpu"
+DEVICE_TYPE = "cuda" if DEVICE.startswith("cuda") else "cpu"
+
+_DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
+_DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
+
+
+class SIGReg(torch.nn.Module):
+    def __init__(self, knots: int = 17, num_proj: int = 1024):
+        super().__init__()
+        self.num_proj = num_proj
+        t = torch.linspace(0, 3, knots, dtype=torch.float32)
+        dt = 3.0 / (knots - 1)
+        weights = torch.full((knots,), 2 * dt, dtype=torch.float32)
+        weights[[0, -1]] = dt
+        window = torch.exp(-t.square() / 2.0)
+        self.register_buffer("t", t)
+        self.register_buffer("phi", window)
+        self.register_buffer("weights", weights * window)
+
+    def forward(self, proj: torch.Tensor) -> torch.Tensor:
+        if proj.dim() == 2:
+            proj = proj.unsqueeze(0)
+        proj = proj.float()
+        A = torch.randn(proj.size(-1), self.num_proj, device=proj.device, dtype=torch.float32)
+        A = A.div_(A.norm(p=2, dim=0))
+        x_t = (proj @ A).unsqueeze(-1) * self.t
+        err = (x_t.cos().mean(-3) - self.phi).square() + x_t.sin().mean(-3).square()
+        statistic = (err @ self.weights) * proj.size(-2)
+        return statistic.mean()
+
+
+@dataclass
+class LAOMConfig:
+    num_epochs: int = 150
+    batch_size: int = 1024
+    use_aug: bool = True
+    future_obs_offset: int = 1
+    learning_rate: float = 3e-4
+    weight_decay: float = 0.0
+    warmup_epochs: int = 5
+    grad_norm: Optional[float] = None
+    latent_action_dim: int = 256
+    act_head_dim: int = 512
+    act_head_dropout: float = 0.0
+    obs_head_dim: int = 512
+    obs_head_dropout: float = 0.0
+    encoder_scale: int = 1
+    encoder_num_res_blocks: int = 1
+    encoder_dropout: float = 0.0
+    encoder_norm_out: bool = True
+    encoder_deep: bool = True
+    sigreg_coef: float = 0.09
+    sigreg_knots: int = 17
+    sigreg_num_proj: int = 1024
+    cosine_loss: bool = False
+    frame_stack: int = 3
+    data_path: str = _DEFAULT_TRAIN_DATA_PATH
+
+
+@dataclass
+class Config:
+    project: str = "laom"
+    group: str = "laom-statesigreg"
+    name: str = "laom-statesigreg"
+    seed: int = 0
+    wandb_dir: str = _DEFAULT_WANDB_DIR
+    model_save_path: Optional[str] = None
+
+    lapo: LAOMConfig = field(default_factory=LAOMConfig)
+    bc: BCConfig = field(default_factory=BCConfig)
+    decoder: DecoderConfig = field(default_factory=DecoderConfig)
+
+    def __post_init__(self):
+        self.name = f"{self.name}-{str(uuid.uuid4())}"
+
+
+def train_laom(config: LAOMConfig):
+    dataset = DCSLAOMInMemoryDataset(
+        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
+    )
+    dataloader = DataLoader(dataset, batch_size=config.batch_size, shuffle=True, num_workers=0, pin_memory=False)
+    lapo = LAOM(
+        shape=(3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
+        latent_act_dim=config.latent_action_dim,
+        act_head_dim=config.act_head_dim,
+        act_head_dropout=config.act_head_dropout,
+        obs_head_dim=config.obs_head_dim,
+        obs_head_dropout=config.obs_head_dropout,
+        encoder_scale=config.encoder_scale,
+        encoder_channels=(16, 32, 64, 128, 256) if config.encoder_deep else (16, 32, 32),
+        encoder_num_res_blocks=config.encoder_num_res_blocks,
+        encoder_dropout=config.encoder_dropout,
+        encoder_norm_out=config.encoder_norm_out,
+    ).to(DEVICE)
+    torchinfo.summary(
+        lapo,
+        input_size=[(1, 3 * config.frame_stack, dataset.img_hw, dataset.img_hw)] * 2,
+    )
+    optim = torch.optim.Adam(get_optim_groups(lapo, config.weight_decay), lr=config.learning_rate, fused=True)
+    scheduler = linear_annealing_with_warmup(
+        optim,
+        len(dataloader) * config.warmup_epochs,
+        len(dataloader) * config.num_epochs,
+    )
+    augmenter = Augmenter(dataset.img_hw)
+    sigreg = SIGReg(knots=config.sigreg_knots, num_proj=config.sigreg_num_proj).to(DEVICE)
+
+    start_time = time.time()
+    total_tokens = 0
+    total_iterations = 0
+    for epoch in trange(config.num_epochs, desc="Epochs"):
+        lapo.train()
+        for batch in dataloader:
+            total_tokens += config.batch_size
+            total_iterations += 1
+
+            obs, _, future_obs, _, _, _ = [b.to(DEVICE) for b in batch]
+            obs = normalize_img(obs.permute((0, 3, 1, 2)))
+            future_obs = normalize_img(future_obs.permute((0, 3, 1, 2)))
+
+            if config.use_aug:
+                obs = augmenter(obs)
+                future_obs = augmenter(future_obs)
+
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
+                latent_next_obs, latent_action, _ = lapo(obs, future_obs)
+                future_obs_emb = lapo.encoder(future_obs).flatten(1)
+                if config.cosine_loss:
+                    loss0 = 1 - F.cosine_similarity(latent_next_obs, future_obs_emb, dim=-1).mean()
+                else:
+                    loss0 = F.mse_loss(latent_next_obs, future_obs_emb)
+            sigreg_loss = sigreg(future_obs_emb)
+            loss = loss0 + config.sigreg_coef * sigreg_loss
+
+            optim.zero_grad(set_to_none=True)
+            loss.backward()
+            if config.grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(lapo.parameters(), max_norm=config.grad_norm)
+            optim.step()
+            scheduler.step()
+
+            wandb.log(
+                {
+                    "lapo/total_loss": loss.item(),
+                    "lapo/mse_loss": loss0.item(),
+                    "lapo/sigreg_loss": sigreg_loss.item(),
+                    "lapo/future_obs_norm": torch.norm(future_obs_emb, p=2, dim=-1).mean().item(),
+                    "lapo/online_obs_norm": torch.norm(latent_next_obs, p=2, dim=-1).mean().item(),
+                    "lapo/latent_act_norm": torch.norm(latent_action, p=2, dim=-1).mean().item(),
+                    "lapo/throughput": total_tokens / (time.time() - start_time),
+                    "lapo/learning_rate": scheduler.get_last_lr()[0],
+                    "lapo/grad_norm": get_grad_norm(lapo).item(),
+                    "lapo/epoch": epoch,
+                    "lapo/total_steps": total_iterations,
+                }
+            )
+    return lapo
+
+
+@pyrallis.wrap()
+def train(config: Config):
+    run = wandb.init(
+        project=config.project,
+        group=config.group,
+        name=config.name,
+        config=asdict(config),
+        save_code=True,
+        dir=config.wandb_dir,
+    )
+    set_seed(config.seed)
+    lapo = train_laom(config=config.lapo)
+    actor = train_bc(lam=lapo, config=config.bc)
+    action_decoder = train_act_decoder(actor=actor, config=config.decoder, bc_config=config.bc)
+
+    if config.model_save_path:
+        save_path = Path(config.model_save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {"lapo": lapo.state_dict(), "actor": actor.state_dict(), "action_decoder": action_decoder.state_dict()},
+            save_path,
+        )
+        print(f"Saved model checkpoint to: {save_path}")
+
+    run.finish()
+    return lapo, actor, action_decoder
+
+
+if __name__ == "__main__":
+    train()

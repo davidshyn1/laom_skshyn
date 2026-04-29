@@ -414,6 +414,8 @@ def train_laom(config: LAOMConfig):
                     "lapo/target_obs_norm": torch.norm(next_obs_target, p=2, dim=-1).mean().item(),
                     "lapo/online_obs_norm": torch.norm(latent_next_obs, p=2, dim=-1).mean().item(),
                     "lapo/latent_act_norm": torch.norm(latent_action, p=2, dim=-1).mean().item(),
+                    "lapo/log_var_mean": log_var.mean().item(),
+                    "lapo/log_var_std": log_var.std().item(),
                     "lapo/epoch": epoch,
                     "lapo/total_steps": total_iterations,
                 }

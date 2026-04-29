@@ -45,6 +45,7 @@ if torch.cuda.is_available():
     DEVICE = f"cuda:{_GPU_ID}"
 else:
     DEVICE = "cpu"
+DEVICE_TYPE = "cuda" if DEVICE.startswith("cuda") else "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
 _DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
@@ -67,14 +68,15 @@ def get_expert_return(hdf5_path: str) -> Optional[float]:
 
 @dataclass
 class LAPOConfig:
-    num_epochs: int = 100
-    batch_size: int = 256
+    num_epochs: int = 150
+    batch_size: int = 1024
+    use_aug: bool = True
     future_obs_offset: int = 1
     learning_rate: float = 3e-4
     weight_decay: float = 0.0
     warmup_epochs: int = 5
     grad_norm: Optional[float] = None
-    latent_action_dim: int = 8
+    latent_action_dim: int = 256
     encoder_scale: int = 1
     encoder_num_res_blocks: int = 1
     encoder_deep: bool = True
@@ -141,7 +143,7 @@ def train_lapo(config: LAPOConfig):
         config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
     )
     dataloader = DataLoader(
-        dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, pin_memory=pin_memory, num_workers=0
+        dataset, batch_size=config.batch_size, shuffle=True, pin_memory=pin_memory, num_workers=0
     )
     lapo = LAPO(
         shape=(3 * config.frame_stack, dataset.img_hw, dataset.img_hw),
@@ -167,25 +169,34 @@ def train_lapo(config: LAPOConfig):
 
     linear_probe = nn.Linear(config.latent_action_dim, dataset.act_dim).to(DEVICE)
     probe_optim = torch.optim.Adam(linear_probe.parameters(), lr=config.learning_rate)
+    augmenter = Augmenter(dataset.img_hw)
 
     start_time = time.time()
     total_tokens = 0
-    total_steps = 0
+    total_iterations = 0
     for epoch in trange(config.num_epochs, desc="Epochs"):
         lapo.train()
         for batch in dataloader:
             total_tokens += config.batch_size
-            total_steps += 1
+            total_iterations += 1
 
             obs, next_obs, future_obs, actions, _, _ = [b.to(DEVICE) for b in batch]
             obs = normalize_img(obs.permute((0, 3, 1, 2)))
             next_obs = normalize_img(next_obs.permute((0, 3, 1, 2)))
             future_obs = normalize_img(future_obs.permute((0, 3, 1, 2)))
+            if config.use_aug:
+                obs_aug = augmenter(obs)
+                future_obs_aug = augmenter(future_obs)
+                next_obs_aug = augmenter(next_obs)
 
             # update lapo
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
-                pred_next_obs, latent_action = lapo(obs, future_obs)
-                loss = F.mse_loss(pred_next_obs, next_obs)
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
+                if config.use_aug:
+                    pred_next_obs, latent_action = lapo(obs_aug, future_obs_aug)
+                    loss = F.mse_loss(pred_next_obs, next_obs_aug)
+                else:
+                    pred_next_obs, latent_action = lapo(obs, future_obs)
+                    loss = F.mse_loss(pred_next_obs, next_obs)
 
             optim.zero_grad(set_to_none=True)
             loss.backward()
@@ -195,7 +206,7 @@ def train_lapo(config: LAPOConfig):
             scheduler.step()
 
             # update linear probe
-            with torch.autocast(DEVICE, dtype=torch.bfloat16):
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 pred_action = linear_probe(latent_action.detach())
                 probe_loss = F.mse_loss(pred_action, actions)
 
@@ -211,7 +222,7 @@ def train_lapo(config: LAPOConfig):
                     "lapo/learning_rate": scheduler.get_last_lr()[0],
                     "lapo/grad_norm": get_grad_norm(lapo).item(),
                     "lapo/epoch": epoch,
-                    "lapo/total_steps": total_tokens,
+                    "lapo/total_steps": total_iterations,
                 }
             )
 
@@ -225,7 +236,7 @@ def train_lapo(config: LAPOConfig):
             {
                 "lapo/next_obs_pred": reconstruction_img,
                 "lapo/epoch": epoch,
-                "lapo/total_steps": total_tokens,
+                "lapo/total_steps": total_iterations,
             }
         )
 
