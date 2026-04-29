@@ -174,8 +174,8 @@ class DecoderConfig:
 @dataclass
 class Config:
     project: str = "laom"
-    group: str = "laom-labels"
-    name: str = "laom-labels"
+    group: str = "laom-labels-ibsigreg"
+    name: str = "laom-labels-ibsigreg"
     seed: int = 0
     wandb_dir: str = _DEFAULT_WANDB_DIR
     model_save_path: Optional[str] = None
