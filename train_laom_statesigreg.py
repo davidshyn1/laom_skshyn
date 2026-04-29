@@ -174,6 +174,7 @@ def train_laom(config: LAOMConfig):
 
             wandb.log(
                 {
+                    "statesigreg/total_steps": total_iterations,
                     "lapo/total_loss": loss.item(),
                     "lapo/mse_loss": loss0.item(),
                     "lapo/sigreg_loss": sigreg_loss.item(),
@@ -202,7 +203,9 @@ def train(config: Config):
     )
     set_seed(config.seed)
     lapo = train_laom(config=config.lapo)
+    wandb.log({"bc/total_steps": 0})
     actor = train_bc(lam=lapo, config=config.bc)
+    wandb.log({"decoder/total_steps": 0})
     action_decoder = train_act_decoder(actor=actor, config=config.decoder, bc_config=config.bc)
 
     if config.model_save_path:
