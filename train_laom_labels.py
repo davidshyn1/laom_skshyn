@@ -174,9 +174,9 @@ def evaluate(lam, dataloader, device):
 
 
 def train_laom(config: LAOMConfig):
-    pin_memory = True
+    pin_memory = False
     dataset = DCSLAOMInMemoryDataset(
-        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
+        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
     )
     dataloader = DataLoader(
         dataset,
@@ -189,7 +189,7 @@ def train_laom(config: LAOMConfig):
         config.labeled_data_path,
         max_offset=config.future_obs_offset,
         frame_stack=config.frame_stack,
-        device="cpu",
+        device=DEVICE,
     )
     labeled_dataloader = DataLoader(
         labeled_dataset, batch_size=config.labeled_batch_size, pin_memory=pin_memory, num_workers=0
@@ -197,7 +197,7 @@ def train_laom(config: LAOMConfig):
 
     if config.eval_data_path is not None:
         eval_dataset = DCSLAOMInMemoryDataset(
-            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device="cpu"
+            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device=DEVICE
         )
         eval_dataloader = DataLoader(
             eval_dataset,
@@ -413,8 +413,8 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAOMWithLabels, config: BCConfig):
-    pin_memory = True
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
+    pin_memory = False
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device=DEVICE)
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -546,8 +546,8 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    pin_memory = True
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
+    pin_memory = False
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device=DEVICE)
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,

@@ -146,9 +146,9 @@ class Config:
 
 
 def train_laom(config: LAOMConfig):
-    pin_memory = True
+    pin_memory = False
     dataset = DCSLAOMInMemoryDataset(
-        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
+        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
     )
     dataloader = DataLoader(
         dataset,
@@ -320,8 +320,8 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: LAOM, config: BCConfig):
-    pin_memory = True
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
+    pin_memory = False
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device=DEVICE)
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
@@ -453,8 +453,8 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
         p.requires_grad_(False)
     actor.eval()
 
-    pin_memory = True
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device="cpu")
+    pin_memory = False
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=bc_config.frame_stack, device=DEVICE)
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,

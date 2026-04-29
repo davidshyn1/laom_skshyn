@@ -142,9 +142,9 @@ def evaluate(idm, dataloader, device):
 
 
 def train_idm(config: IDMConfig):
-    pin_memory = True
+    pin_memory = False
     dataset = DCSLAOMInMemoryDataset(
-        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device="cpu"
+        config.data_path, max_offset=config.future_obs_offset, frame_stack=config.frame_stack, device=DEVICE
     )
     dataloader = DataLoader(
         dataset,
@@ -157,7 +157,7 @@ def train_idm(config: IDMConfig):
 
     if config.eval_data_path is not None:
         eval_dataset = DCSLAOMInMemoryDataset(
-            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device="cpu"
+            config.eval_data_path, max_offset=1, frame_stack=config.frame_stack, device=DEVICE
         )
         eval_dataloader = DataLoader(
             eval_dataset,
@@ -282,8 +282,8 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
 
 
 def train_bc(lam: IDMLabels, config: BCConfig):
-    pin_memory = True
-    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device="cpu")
+    pin_memory = False
+    dataset = DCSInMemoryDataset(config.data_path, frame_stack=config.frame_stack, device=DEVICE)
     dataloader = DataLoader(
         dataset,
         batch_size=config.batch_size,
