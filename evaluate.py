@@ -180,21 +180,35 @@ def main():
         f"episodes={eval_cfg['eval_episodes']}, seed={eval_cfg['eval_seed']}, frame_stack={eval_cfg['frame_stack']}"
     )
 
-    print("[Stage 6/6] Running policy evaluation...")
-    returns = evaluate_bc(
-        eval_env,
-        actor,
-        num_episodes=eval_cfg["eval_episodes"],
-        seed=eval_cfg["eval_seed"],
-        device=device,
-        action_decoder=action_decoder,
-    )
+    eval_repeats = 10
+    print(f"[Stage 6/6] Running policy evaluation ({eval_repeats} repeats)...")
+    run_means = []
+    all_returns = []
+    for run_idx in range(eval_repeats):
+        # Shift seed per repeat to sample different trajectories.
+        run_seed = eval_cfg["eval_seed"] + run_idx * eval_cfg["eval_episodes"]
+        returns = evaluate_bc(
+            eval_env,
+            actor,
+            num_episodes=eval_cfg["eval_episodes"],
+            seed=run_seed,
+            device=device,
+            action_decoder=action_decoder,
+        )
+        run_means.append(float(returns.mean()))
+        all_returns.append(returns)
+
+    run_means = np.array(run_means)
+    all_returns = np.concatenate(all_returns)
+    mean_return_standard_error = run_means.std(ddof=1) / np.sqrt(eval_repeats)
 
     print(f"Loaded checkpoint: {model_path}")
     print(f"Device: {device}")
-    print(f"Episodes: {eval_cfg['eval_episodes']}")
-    print(f"Return mean: {returns.mean():.4f}")
-    print(f"Return std: {returns.std():.4f}")
+    print(f"Episodes per repeat: {eval_cfg['eval_episodes']}")
+    print(f"Evaluation repeats: {eval_repeats}")
+    print(f"Return mean: {all_returns.mean():.4f}")
+    print(f"Return std: {all_returns.std():.4f}")
+    print(f"Mean return standard error: {mean_return_standard_error:.4f}")
 
 
 if __name__ == "__main__":
