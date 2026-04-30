@@ -3,6 +3,7 @@ import math
 import os
 from pathlib import Path
 import numpy as np
+from PIL import Image
 import torch
 import yaml
 from tqdm import trange
@@ -20,12 +21,39 @@ def build_device() -> str:
     return "cpu"
 
 
+def _extract_rgb_frame(obs: np.ndarray) -> np.ndarray:
+    """Extract a single RGB frame from observation."""
+    if obs.ndim == 3 and obs.shape[-1] >= 3:
+        # For stacked observations shaped as HxWx(3*k), use latest frame.
+        if obs.shape[-1] % 3 == 0:
+            return obs[..., -3:].astype(np.uint8)
+        return obs[..., :3].astype(np.uint8)
+    raise ValueError(f"Unexpected observation shape for rendering: {obs.shape}")
+
+
 @torch.no_grad()
-def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=None):
+def evaluate_bc(
+    env,
+    actor,
+    num_episodes,
+    seed=0,
+    device="cpu",
+    action_decoder=None,
+    render_capture_dir=None,
+    render_capture_count=0,
+):
     returns = []
+    captured = 0
+    if render_capture_dir is not None and render_capture_count > 0:
+        Path(render_capture_dir).mkdir(parents=True, exist_ok=True)
+
     for ep in trange(num_episodes, desc="Evaluating", leave=False):
         total_reward = 0.0
         obs, _ = env.reset(seed=seed + ep)
+        if captured < render_capture_count and render_capture_dir is not None:
+            frame = _extract_rgb_frame(obs)
+            Image.fromarray(frame).save(Path(render_capture_dir) / f"eval_frame_{captured + 1:02d}.png")
+            captured += 1
         done = False
         while not done:
             obs_ = torch.tensor(obs.copy(), device=device)[None].permute(0, 3, 1, 2)
@@ -38,6 +66,10 @@ def evaluate_bc(env, actor, num_episodes, seed=0, device="cpu", action_decoder=N
                     action = action_decoder(action)
 
             obs, reward, terminated, truncated, _ = env.step(action.squeeze().cpu().numpy())
+            if captured < render_capture_count and render_capture_dir is not None:
+                frame = _extract_rgb_frame(obs)
+                Image.fromarray(frame).save(Path(render_capture_dir) / f"eval_frame_{captured + 1:02d}.png")
+                captured += 1
             done = terminated or truncated
             total_reward += reward
         returns.append(total_reward)
@@ -141,6 +173,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config_path", required=True, help="Path to yaml config")
     parser.add_argument("--model_path", default=None, help="Override model path (optional)")
+    parser.add_argument(
+        "--save_render_images",
+        action="store_true",
+        help="Save rendered evaluation frames as PNG files",
+    )
+    parser.add_argument(
+        "--render_save_dir",
+        default="data",
+        help="Directory to save rendered evaluation images",
+    )
+    parser.add_argument(
+        "--num_render_images",
+        type=int,
+        default=4,
+        help="Number of rendered images to save",
+    )
     args = parser.parse_args()
 
     with open(args.config_path, "r", encoding="utf-8") as f:
@@ -180,13 +228,14 @@ def main():
         f"episodes={eval_cfg['eval_episodes']}, seed={eval_cfg['eval_seed']}, frame_stack={eval_cfg['frame_stack']}"
     )
 
-    eval_repeats = 10
+    eval_repeats = 1
     print(f"[Stage 6/6] Running policy evaluation ({eval_repeats} repeats)...")
     run_means = []
     all_returns = []
     for run_idx in range(eval_repeats):
         # Shift seed per repeat to sample different trajectories.
         run_seed = eval_cfg["eval_seed"] + run_idx * eval_cfg["eval_episodes"]
+        should_capture = args.save_render_images and run_idx == 0
         returns = evaluate_bc(
             eval_env,
             actor,
@@ -194,6 +243,8 @@ def main():
             seed=run_seed,
             device=device,
             action_decoder=action_decoder,
+            render_capture_dir=args.render_save_dir if should_capture else None,
+            render_capture_count=args.num_render_images if should_capture else 0,
         )
         run_means.append(float(returns.mean()))
         all_returns.append(returns)
@@ -209,6 +260,8 @@ def main():
     print(f"Return mean: {all_returns.mean():.4f}")
     print(f"Return std: {all_returns.std():.4f}")
     print(f"Mean return standard error: {mean_return_standard_error:.4f}")
+    if args.save_render_images:
+        print(f"Saved {args.num_render_images} rendered images to: {Path(args.render_save_dir).resolve()}")
 
 
 if __name__ == "__main__":
