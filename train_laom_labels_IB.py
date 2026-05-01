@@ -300,8 +300,6 @@ def train_laom(config: LAOMConfig):
                 else:
                     loss0 = F.mse_loss(latent_next_obs, next_obs_target.detach())
 
-                kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).mean()
-
             # loss with true actions
             labeled_batch = next(labeled_dataloader_iter)
             label_obs, label_next_obs, label_future_obs, label_actions, _, _ = [b.to(DEVICE) for b in labeled_batch]
@@ -318,11 +316,14 @@ def train_laom(config: LAOMConfig):
             with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
                 if config.use_aug:
                     # using augmenter directly will not work due to bf16
+                    _, _, _, label_mu, label_log_var = lapo(label_obs_aug, label_future_obs_aug, stochastic=True)
                     _, _, pred_action, _ = lapo(label_obs_aug, label_future_obs_aug, predict_true_act=True)
                 else:
+                    _, _, _, label_mu, label_log_var = lapo(label_obs, label_future_obs, stochastic=True)
                     _, _, pred_action, _ = lapo(label_obs, label_future_obs, predict_true_act=True)
 
                 loss1 = F.mse_loss(pred_action, label_actions)
+                kl_loss = -0.5 * (1 + label_log_var - label_mu.pow(2) - label_log_var.exp()).mean()
     
             loss = loss0 + config.labeled_loss_coef * loss1 + config.kl_coef * kl_loss
 
@@ -375,8 +376,8 @@ def train_laom(config: LAOMConfig):
                     "lapo/target_obs_norm": torch.norm(next_obs_target, p=2, dim=-1).mean().item(),
                     "lapo/online_obs_norm": torch.norm(latent_next_obs, p=2, dim=-1).mean().item(),
                     "lapo/latent_act_norm": torch.norm(latent_action, p=2, dim=-1).mean().item(),
-                    "lapo/log_var_mean": log_var.mean().item(),
-                    "lapo/log_var_std": log_var.std().item(),
+                    "lapo/log_var_mean": label_log_var.mean().item(),
+                    "lapo/log_var_std": label_log_var.std().item(),
                     "lapo/epoch": epoch,
                     "lapo/total_steps": total_iterations,
                 }

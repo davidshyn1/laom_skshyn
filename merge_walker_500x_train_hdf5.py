@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge walker-run-500x-train_*.hdf5 shards into one HDF5 (episode groups renumbered 0..N-1)."""
+"""Merge {environment}-500x-train_*.hdf5 shards into one HDF5 (episode groups renumbered 0..N-1)."""
 from __future__ import annotations
 
 import argparse
@@ -20,29 +20,40 @@ def shard_sort_key(path: str) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "-e",
+        "--environment",
+        default="walker-run",
+        choices=["walker-run", "cheetah-run", "hopper-hop", "humanoid-walk"],
+        help="Environment name used in shard filename placeholders.",
+    )
     ap.add_argument("--data-dir", default="/yj_hdd/skshyn/lam/dataset/data")
     ap.add_argument(
         "--pattern",
-        default="walker-run-500x-train_*.hdf5",
-        help="Glob under data-dir (should not match test set).",
+        default="{environment}-500x-train_*.hdf5",
+        help="Glob under data-dir (should not match test set). Supports {environment}.",
     )
     ap.add_argument(
         "-o",
         "--output",
-        default="/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5",
+        default="/yj_hdd/skshyn/lam/dataset/data/{environment}-500x-train_merged.hdf5",
+        help="Merged output path. Supports {environment}.",
     )
     args = ap.parse_args()
 
-    paths = glob.glob(os.path.join(args.data_dir, args.pattern))
+    pattern = args.pattern.format(environment=args.environment)
+    output = args.output.format(environment=args.environment)
+
+    paths = glob.glob(os.path.join(args.data_dir, pattern))
     paths = [p for p in paths if "test" not in os.path.basename(p).lower()]
     paths = sorted(paths, key=shard_sort_key)
     if not paths:
         print("No train shards found.", file=sys.stderr)
         sys.exit(1)
 
-    out_dir = os.path.dirname(os.path.abspath(args.output))
+    out_dir = os.path.dirname(os.path.abspath(output))
     os.makedirs(out_dir, exist_ok=True)
-    tmp_out = args.output + ".partial"
+    tmp_out = output + ".partial"
 
     if os.path.exists(tmp_out):
         os.unlink(tmp_out)
@@ -59,8 +70,8 @@ def main() -> None:
                     if global_idx % 500 == 0:
                         print(f"  episodes merged: {global_idx}", flush=True)
 
-    os.replace(tmp_out, args.output)
-    print(f"Done: {global_idx} episodes -> {args.output}", flush=True)
+    os.replace(tmp_out, output)
+    print(f"Done: {global_idx} episodes -> {output}", flush=True)
 
 
 if __name__ == "__main__":

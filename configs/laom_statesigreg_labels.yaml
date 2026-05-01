@@ -8,12 +8,12 @@ lapo:
   batch_size: 1024
   labeled_batch_size: 256
   labeled_loss_coef: 0.001
-  sigreg_coef: 0.005
+  sigreg_coef: 0.001
   sigreg_knots: 17
   sigreg_num_proj: 1024
   cosine_loss: False
   use_aug: True
-  future_obs_offset: 1
+  future_obs_offset: 10
   learning_rate: 0.0001
   weight_decay: 0.0
   warmup_epochs: 3

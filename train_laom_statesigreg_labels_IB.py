@@ -1,3 +1,4 @@
+import math
 import os
 import time
 import uuid
@@ -7,6 +8,7 @@ from typing import Optional
 
 import pyrallis
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torchinfo
 import wandb
@@ -155,6 +157,12 @@ def train_laom(config: LAOMConfig):
     )
     augmenter = Augmenter(dataset.img_hw)
     sigreg = SIGReg(knots=config.sigreg_knots, num_proj=config.sigreg_num_proj).to(DEVICE)
+    state_probe = nn.Linear(math.prod(lapo.final_encoder_shape), dataset.state_dim).to(DEVICE)
+    state_probe_optim = torch.optim.Adam(state_probe.parameters(), lr=config.learning_rate)
+    act_linear_probe = nn.Linear(config.latent_action_dim, dataset.act_dim).to(DEVICE)
+    act_probe_optim = torch.optim.Adam(act_linear_probe.parameters(), lr=config.learning_rate)
+    state_act_linear_probe = nn.Linear(math.prod(lapo.final_encoder_shape), dataset.act_dim).to(DEVICE)
+    state_act_probe_optim = torch.optim.Adam(state_act_linear_probe.parameters(), lr=config.learning_rate)
 
     total_tokens, total_iterations = 0, 0
     start_time = time.time()
@@ -164,7 +172,7 @@ def train_laom(config: LAOMConfig):
         for batch in dataloader:
             total_tokens += config.batch_size
             total_iterations += 1
-            obs, _, future_obs, _, _, _ = [b.to(DEVICE) for b in batch]
+            obs, _, future_obs, debug_actions, debug_states, _ = [b.to(DEVICE) for b in batch]
             obs = normalize_img(obs.permute((0, 3, 1, 2)))
             future_obs = normalize_img(future_obs.permute((0, 3, 1, 2)))
             if config.use_aug:
@@ -172,14 +180,14 @@ def train_laom(config: LAOMConfig):
                 future_obs = augmenter(future_obs)
 
             with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
-                latent_next_obs, latent_action, _, mu, log_var = lapo(obs, future_obs, stochastic=True)
+                latent_next_obs, latent_action, obs_hidden, mu, log_var = lapo(obs, future_obs, stochastic=True)
+                obs_emb = lapo.encoder(obs).flatten(1)
                 future_obs_emb = lapo.encoder(future_obs).flatten(1)
                 if config.cosine_loss:
                     loss0 = 1 - F.cosine_similarity(latent_next_obs, future_obs_emb, dim=-1).mean()
                 else:
                     loss0 = F.mse_loss(latent_next_obs, future_obs_emb)
-                kl_loss = -0.5 * (1 + log_var - mu.pow(2) - log_var.exp()).mean()
-            sigreg_loss = sigreg(future_obs_emb)
+            sigreg_loss = sigreg(obs_emb)
 
             labeled_batch = next(labeled_iter)
             label_obs, _, label_future_obs, label_actions, _, _ = [b.to(DEVICE) for b in labeled_batch]
@@ -189,8 +197,10 @@ def train_laom(config: LAOMConfig):
                 label_obs = augmenter(label_obs)
                 label_future_obs = augmenter(label_future_obs)
             with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
+                _, _, _, label_mu, label_log_var = lapo(label_obs, label_future_obs, stochastic=True)
                 _, _, pred_action, _ = lapo(label_obs, label_future_obs, predict_true_act=True)
                 loss1 = F.mse_loss(pred_action, label_actions)
+                kl_loss = -0.5 * (1 + label_log_var - label_mu.pow(2) - label_log_var.exp()).mean()
 
             loss = loss0 + config.labeled_loss_coef * loss1 + config.kl_coef * kl_loss + config.sigreg_coef * sigreg_loss
             optim.zero_grad(set_to_none=True)
@@ -200,19 +210,44 @@ def train_laom(config: LAOMConfig):
             optim.step()
             scheduler.step()
 
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
+                pred_states = state_probe(obs_hidden.detach())
+                state_probe_loss = F.mse_loss(pred_states, debug_states)
+            state_probe_optim.zero_grad(set_to_none=True)
+            state_probe_loss.backward()
+            state_probe_optim.step()
+
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
+                pred_action = act_linear_probe(latent_action.detach())
+                act_probe_loss = F.mse_loss(pred_action, debug_actions)
+            act_probe_optim.zero_grad(set_to_none=True)
+            act_probe_loss.backward()
+            act_probe_optim.step()
+
+            with torch.autocast(DEVICE_TYPE, dtype=torch.bfloat16):
+                state_pred_action = state_act_linear_probe(obs_hidden.detach())
+                state_act_probe_loss = F.mse_loss(state_pred_action, debug_actions)
+            state_act_probe_optim.zero_grad(set_to_none=True)
+            state_act_probe_loss.backward()
+            state_act_probe_optim.step()
+
             wandb.log(
                 {
-                    "statesigreg/total_steps": total_iterations,
+                    "lapo/total_steps": total_iterations,
                     "lapo/total_loss": loss.item(),
                     "lapo/mse_loss": loss0.item(),
                     "lapo/true_action_mse_loss": loss1.item(),
                     "lapo/kl_loss": kl_loss.item(),
                     "lapo/sigreg_loss": sigreg_loss.item(),
+                    "lapo/state_probe_mse_loss": state_probe_loss.item(),
+                    "lapo/action_probe_mse_loss": act_probe_loss.item(),
+                    "lapo/state_action_probe_mse_loss": state_act_probe_loss.item(),
                     "lapo/future_obs_norm": torch.norm(future_obs_emb, p=2, dim=-1).mean().item(),
+                    "lapo/obs_hidden_norm": torch.norm(obs_hidden, p=2, dim=-1).mean().item(),
                     "lapo/online_obs_norm": torch.norm(latent_next_obs, p=2, dim=-1).mean().item(),
                     "lapo/latent_act_norm": torch.norm(latent_action, p=2, dim=-1).mean().item(),
-                    "lapo/log_var_mean": log_var.mean().item(),
-                    "lapo/log_var_std": log_var.std().item(),
+                    "lapo/log_var_mean": label_log_var.mean().item(),
+                    "lapo/log_var_std": label_log_var.std().item(),
                     "lapo/throughput": total_tokens / (time.time() - start_time),
                     "lapo/learning_rate": scheduler.get_last_lr()[0],
                     "lapo/grad_norm": get_grad_norm(lapo).item(),
@@ -224,7 +259,6 @@ def train_laom(config: LAOMConfig):
             eval_mse_loss = evaluate(lapo, eval_dataloader, device=DEVICE)
             wandb.log(
                 {
-                    "statesigreg/total_steps": total_iterations,
                     "lapo/eval_true_action_mse_loss": eval_mse_loss,
                     "lapo/epoch": epoch,
                     "lapo/total_steps": total_iterations,

@@ -49,7 +49,7 @@ bc:
   data_path: "/home/irteam/data-vol1/laom_data/walker-run-500x-train_1to10_merged.hdf5"
   dcs_backgrounds_path: "/home/irteam/data-vol1/DAVIS/JPEGImages/480p"
   dcs_backgrounds_split: "train"
-  eval_episodes: 5
+  eval_episodes: 10
   eval_seed: 0
 
 decoder:
@@ -63,5 +63,5 @@ decoder:
   # TODO: change to your DAVIS path
   dcs_backgrounds_path: "/home/irteam/data-vol1/DAVIS/JPEGImages/480p"
   dcs_backgrounds_split: "train"
-  eval_episodes: 25
+  eval_episodes: 10
   eval_seed: 0
