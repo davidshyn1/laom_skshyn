@@ -1,14 +1,14 @@
 group: "laom-labels-ib-default"
 seed: 0
 wandb_dir: "/home/irteam/data-vol1/wandb"
-model_save_path: "/home/irteam/data-vol1/laom_model/laom_IB.pt"
+model_save_path: "/home/irteam/data-vol1/laom_model/laom_IB_coef0.1_kl0.01.pt"
 
 lapo:
   num_epochs: 10
   batch_size: 1024
   labeled_batch_size: 256
-  labeled_loss_coef: 0.001
-  kl_coef: 0.00001
+  labeled_loss_coef: 0.1
+  kl_coef: 0.01
   cosine_loss: False
   use_aug: True
   future_obs_offset: 10
