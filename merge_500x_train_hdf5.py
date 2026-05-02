@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Merge {environment}-500x-train_*.hdf5 shards into one HDF5 (episode groups renumbered 0..N-1)."""
+"""Merge {environment}-500x-train_*.hdf5 shards into one HDF5.
+
+Shard files are ordered by the numeric suffix in ...train_<n>.hdf5 (typically n starts at 1).
+Episode groups in the merged file are renumbered 0..N-1 in that shard order.
+"""
 from __future__ import annotations
 
 import argparse
