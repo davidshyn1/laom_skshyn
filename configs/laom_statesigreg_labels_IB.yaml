@@ -1,15 +1,15 @@
 group: "laom-statesigreg-labels-ib-default"
 seed: 0
 wandb_dir: "/home/irteam/data-vol1/wandb"
-model_save_path: "/home/irteam/data-vol1/laom_model/laom_statesigreg_labels_IB.pt"
+model_save_path: "/home/irteam/data-vol1/laom_model/laom_statesigreg_labels_IB_coef0.01_kl0.001_sigreg0.00001.pt"
 
 lapo:
   num_epochs: 10
   batch_size: 1024
   labeled_batch_size: 256
-  labeled_loss_coef: 0.001
-  kl_coef: 0.00001
-  sigreg_coef: 0.001
+  labeled_loss_coef: 0.01
+  kl_coef: 0.001
+  sigreg_coef: 0.00001
   sigreg_knots: 17
   sigreg_num_proj: 1024
   cosine_loss: False
