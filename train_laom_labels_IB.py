@@ -139,6 +139,7 @@ class DecoderConfig:
 class Config:
     project: str = "laom"
     group: str = "laom-labels-ib"
+    environment: Optional[str] = None
     name: str = "laom-labels-ib"
     seed: int = 0
     wandb_dir: str = _DEFAULT_WANDB_DIR
@@ -659,8 +660,9 @@ def train_act_decoder(actor: Actor, config: DecoderConfig, bc_config: BCConfig):
 
 @pyrallis.wrap()
 def train(config: Config):
+    wandb_project = f"{config.project}-{config.environment}" if config.environment else config.project
     run = wandb.init(
-        project=config.project,
+        project=wandb_project,
         group=config.group,
         name=config.name,
         config=asdict(config),

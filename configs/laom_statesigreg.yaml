@@ -1,4 +1,5 @@
 group: "laom-statesigreg-default"
+environment: "hopper-hop"
 seed: 0
 wandb_dir: "/home/irteam/data-vol1/wandb"
 model_save_path: "/home/irteam/data-vol1/laom_model/laom_statesigreg.pt"
