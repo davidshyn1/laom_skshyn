@@ -45,8 +45,8 @@ else:
     DEVICE = "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
-_DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
-_DEFAULT_EVAL_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-10x-test.hdf5"
+_DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/hopper-hop-500x-train_merged.hdf5"
+_DEFAULT_EVAL_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/hopper-hop-500x-test_10traj.hdf5"
 _DEFAULT_DAVIS_PATH = "/yj_hdd/skshyn/lam/dataset/DAVIS/JPEGImages/480p"
 
 EXPERT_RETURNS = {

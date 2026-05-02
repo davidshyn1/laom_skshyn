@@ -84,7 +84,7 @@ def main() -> None:
     ap.add_argument(
         "-e",
         "--environment",
-        default="walker-run",
+        default="hopper-hop",
         choices=["walker-run", "cheetah-run", "hopper-hop", "humanoid-walk"],
         help="Environment name used in shard filename placeholders.",
     )

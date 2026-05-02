@@ -36,7 +36,7 @@ else:
 DEVICE_TYPE = "cuda" if DEVICE.startswith("cuda") else "cpu"
 
 _DEFAULT_WANDB_DIR = str(Path(__file__).resolve().parent / "wandb")
-_DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/walker-run-500x-train_merged.hdf5"
+_DEFAULT_TRAIN_DATA_PATH = "/yj_hdd/skshyn/lam/dataset/data/hopper-hop-500x-train_merged.hdf5"
 
 
 class SIGReg(torch.nn.Module):
