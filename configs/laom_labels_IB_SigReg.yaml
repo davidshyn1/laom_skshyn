@@ -1,8 +1,8 @@
 group: "laom-labels-ib-sigreg"
-environment: "hopper-hop"
+environment: "walker-run"
 seed: 0
 wandb_dir: "/home/irteam/data-vol1/wandb"
-model_save_path: "/home/irteam/data-vol1/laom_model/laom_IB_SigReg.pt"
+model_save_path: "/home/irteam/data-vol1/laom_model/walker-run/laom_IB_SigReg.pt"
 
 lapo:
   num_epochs: 10

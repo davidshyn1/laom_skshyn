@@ -1,8 +1,8 @@
 group: "laom-statesigreg-labels-default"
-environment: "hopper-hop"
+environment: "walker-run"
 seed: 0
 wandb_dir: "/home/irteam/data-vol1/wandb"
-model_save_path: "/home/irteam/data-vol1/laom_model/hopper-hop/laom_statesigreg_labels.pt"
+model_save_path: "/home/irteam/data-vol1/laom_model/walker-run/laom_statesigreg_labels.pt"
 
 lapo:
   num_epochs: 10
